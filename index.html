@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="ja">
+
+<head>
+    <meta charset="utf-8" />
+    <title>法務省地図XML（FlatGeobuf）</title>
+    <meta name="description" content="MapLibre_FlatGeobuf" />
+    <script src="https://unpkg.com/maplibre-gl@2.4.0/dist/maplibre-gl.js"></script>
+    <link href="https://unpkg.com/maplibre-gl@2.4.0/dist/maplibre-gl.css" rel="stylesheet" />
+    <script src="https://unpkg.com/flatgeobuf@3.26.2/dist/flatgeobuf-geojson.min.js"></script>
+    <script src="https://unpkg.com/json-formatter-js"></script>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+        }
+
+        #map {
+            position: absolute;
+            top: 0;
+            bottom: 0;
+            width: 100%;
+        }
+
+        .maplibregl-popup .maplibregl-popup-content {
+            padding: 8px 10px;
+            font: 12px/14px Arial, Helvetica, sans-serif;
+            color: black;
+            background: white;
+            background: rgba(255, 255, 255, 0.9);
+            box-shadow: 0 0 15px rgba(0, 0, 0, 0.4);
+            border-radius: 5px;
+            width: 240x;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="map"></div>
+    <script>
+        document.addEventListener("DOMContentLoaded", async () => {
+            var map = new maplibregl.Map({
+                container: 'map',
+                style: 'https://tile2.openstreetmap.jp/styles/osm-bright-ja/style.json',
+                center: [139.46009, 35.89367],
+                zoom: 15.05,
+                hash: true,
+                attributionControl: false
+            });
+
+            // ズーム・回転
+            map.addControl(new maplibregl.NavigationControl());
+
+            // フルスクリーンモードのオンオフ
+            map.addControl(new maplibregl.FullscreenControl());
+
+            // 現在位置表示
+            map.addControl(new maplibregl.GeolocateControl({
+                positionOptions: {
+                    enableHighAccuracy: false
+                },
+                fitBoundsOptions: { maxZoom: 18 },
+                trackUserLocation: true,
+                showUserLocation: true
+            }));
+
+            // スケール表示
+            map.addControl(new maplibregl.ScaleControl({
+                maxWidth: 200,
+                unit: 'metric'
+            }));
+
+            // Attributionを折りたたみ表示
+            map.addControl(new maplibregl.AttributionControl({
+                compact: true,
+                customAttribution: '（<a href="https://twitter.com/shi__works" target="_blank">Twitter</a> | <a href="https://github.com/shi-works/MojMap-FlatGeobuf" target="_blank">Github</a>） '
+            }));
+
+            function handleHeaderMeta(headerMeta) {
+                console.log("metadata", headerMeta);
+            }
+
+            const response = await fetch(
+                "https://xs489works.xsrv.jp/FlatGeobuf-data/MOJ-XML/11201__9_r.fgb"
+            );
+
+            var hoveredStateId = null;
+
+            map.on("load", async () => {
+                const fc = { type: "FeatureCollection", features: [] };
+                let i = 0;
+                for await (const f of flatgeobuf.deserialize(
+                    response.body,
+                    undefined,
+                    handleHeaderMeta
+                )) {
+                    fc.features.push({ ...f, id: i });
+                    i += 1;
+                }
+
+                // 法務省地図ソース
+                map.addSource("moj-fgb", {
+                    type: "geojson",
+                    data: fc,
+                    attribution: '<a href="https://www.geospatial.jp/ckan/dataset/aigid-moj-11201">「登記所備付データ川越市」（法務省）をもとに変換処理して作成</a>',
+                    generateId: true
+                });
+
+                // 法務省地図ポリゴンレイヤ
+                map.addLayer({
+                    id: "moj-fill",
+                    type: "fill",
+                    source: "moj-fgb",
+                    paint: {
+                        "fill-color": "#FF9393",
+                        "fill-opacity": [
+                            "case",
+                            ["boolean", ["feature-state", "hover"], false],
+                            0.9,
+                            0.4
+                        ]
+                    }
+                });
+
+                // 法務省地図ラインレイヤ
+                map.addLayer({
+                    id: "moj-line",
+                    type: "line",
+                    source: "moj-fgb",
+                    paint: {
+                        'line-color': '#FF3232',
+                        "line-opacity": 1.0,
+                        "line-width": 1
+                    }
+                });
+
+                // ポリゴンレイヤのホバー効果
+                const id = 'moj-fill';
+                const sourceName = 'moj-fgb';
+                map.on('mousemove', id, function (e) {
+                    if (e.features.length > 0) {
+                        if (hoveredStateId) {
+                            map.setFeatureState(
+                                { source: sourceName, id: hoveredStateId },
+                                { hover: false }
+                            );
+                        }
+                        hoveredStateId = e.features[0].id;
+                        map.setFeatureState(
+                            { source: sourceName, id: hoveredStateId },
+                            { hover: true }
+                        );
+                    }
+                });
+
+                map.on('mouseleave', id, function () {
+                    if (hoveredStateId) {
+                        map.setFeatureState(
+                            { source: sourceName, id: hoveredStateId },
+                            { hover: false }
+                        );
+                    }
+                    hoveredStateId = null;
+                });
+
+            });
+
+            // ポップアップ表示
+            map.on('click', 'moj-fill', (e) => {
+                var lng = e.lngLat.lng;
+                var lat = e.lngLat.lat;
+
+                var zahyokei = e.features[0].properties['座標系'];
+                var sokuchikeihambetsu = e.features[0].properties['測地判別'];
+                var chizumei = e.features[0].properties['地図名'];
+                var shikuchosonkodo = e.features[0].properties['市町村C'];
+                var shikuchosommei = e.features[0].properties['市町村名'];
+                var oazakodo = e.features[0].properties['大字コード'];
+                var chomokukodo = e.features[0].properties['丁目コード'];
+                var koazakodo = e.features[0].properties['小字コード'];
+                var yobikodo = e.features[0].properties['予備コード'];
+                var oazamei = e.features[0].properties['大字名'];
+                var koazamei = e.features[0].properties['小字名'];
+                var chiban = e.features[0].properties['地番'];
+                var seidokubun = e.features[0].properties['精度区分'];
+                var zahyochishubetsu = e.features[0].properties['座標値種別'];
+
+                if (zahyokei === undefined) { zahyokei = "-" };
+                if (sokuchikeihambetsu === undefined) { sokuchikeihambetsu = "-" };
+                if (chizumei === undefined) { chizumei = "-" };
+                if (shikuchosonkodo === undefined) { shikuchosonkodo = "-" };
+                if (shikuchosommei === undefined) { shikuchosommei = "-" };
+                if (oazakodo === undefined) { oazakodo = "-" };
+                if (chomokukodo === undefined) { chomokukodo = "-" };
+                if (koazakodo === undefined) { koazakodo = "-" };
+                if (yobikodo === undefined) { yobikodo = "-" };
+                if (oazamei === undefined) { oazamei = "-" };
+                if (koazamei === undefined) { koazamei = "-" };
+                if (chiban === undefined) { chiban = "-" };
+                if (seidokubun === undefined) { seidokubun = "-" };
+                if (zahyochishubetsu === undefined) { zahyochishubetsu = "-" };
+
+                new maplibregl.Popup()
+                    .setLngLat(e.lngLat)
+                    .setHTML('座標系: ' + zahyokei + '<br>'
+                        + '測地系判別: ' + sokuchikeihambetsu + '<br>'
+                        + '地図名: ' + chizumei + '<br>'
+                        + '市区町村コード: ' + shikuchosonkodo + '<br>'
+                        + '市区町村名: ' + shikuchosommei + '<br>'
+                        + '大字コード: ' + oazakodo + '<br>'
+                        + '丁目コード: ' + chomokukodo + '<br>'
+                        + '小字コード: ' + koazakodo + '<br>'
+                        + '予備コード: ' + yobikodo + '<br>'
+                        + '大字名: ' + oazamei + '<br>'
+                        + '小字名: ' + koazamei + '<br>'
+                        + '地番: ' + chiban + '<br>'
+                        + '精度区分: ' + seidokubun + '<br>'
+                        + '座標値種別: ' + zahyochishubetsu + '<br>'
+                        + '座標: ' + lat.toFixed(7) + "," + lng.toFixed(7) + '<br>'
+                        + '<a href=\https://www.google.com/maps?q=' + lat + "," + lng + "&hl=ja' target='_blank'>🌎Google Maps</a>")
+                    .addTo(map);
+            });
+        });
+
+    </script>
+</body>
+
+</html>
