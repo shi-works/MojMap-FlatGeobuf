@@ -32,19 +32,130 @@
             border-radius: 5px;
             width: 240x;
         }
+
+        #controls {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            z-index: 10;
+            background-color: white;
+            padding: 10px;
+            border-radius: 5px;
+            box-shadow: 0 0 15px rgba(0, 0, 0, 0.4);
+        }
     </style>
 </head>
 
 <body>
     <div id="map"></div>
+    <div id="controls">
+        <button id="downloadKML">Download as KML</button>
+    </div>
     <script>
         // DOMがロードされた後に実行
         document.addEventListener("DOMContentLoaded", async () => {
+            let fc = { type: "FeatureCollection", features: [] }; // ここで fc を定義
+
+            // 独自のGeoJSONからKMLへの変換関数
+            function geojsonToKML(geojson) {
+                // KMLのドキュメントを作成
+                const parser = new DOMParser();
+                const kmlDocument = parser.parseFromString('<kml xmlns="http://www.opengis.net/kml/2.2"></kml>', 'application/xml');
+                const kml = kmlDocument.documentElement;
+
+                const documentElement = kmlDocument.createElement('Document');
+                kml.appendChild(documentElement);
+
+                // 指定されたスタイルを追加
+                const styleElement = kmlDocument.createElement('Style');
+                const lineStyleElement = kmlDocument.createElement('LineStyle');
+                const colorElement = kmlDocument.createElement('color');
+                colorElement.textContent = "ffff0000";
+                const widthElement = kmlDocument.createElement('width');
+                widthElement.textContent = "1";
+
+                lineStyleElement.appendChild(colorElement);
+                lineStyleElement.appendChild(widthElement);
+                styleElement.appendChild(lineStyleElement);
+
+                const polyStyleElement = kmlDocument.createElement('PolyStyle');
+                const polyColorElement = kmlDocument.createElement('color');
+                polyColorElement.textContent = "00ffffff";
+
+                polyStyleElement.appendChild(polyColorElement);
+                styleElement.appendChild(polyStyleElement);
+
+                documentElement.appendChild(styleElement);
+
+                // Schemaの作成
+                const schemaElement = kmlDocument.createElement('Schema');
+                schemaElement.setAttribute('name', 'attributes');
+                schemaElement.setAttribute('id', 'attributes');
+
+                // すべてのフィーチャの属性を取得
+                let allProperties = {};
+                geojson.features.forEach(feature => {
+                    for (let prop in feature.properties) {
+                        allProperties[prop] = true;
+                    }
+                });
+
+                for (let prop in allProperties) {
+                    const simpleFieldElement = kmlDocument.createElement('SimpleField');
+                    simpleFieldElement.setAttribute('name', prop);
+                    simpleFieldElement.setAttribute('type', 'string');
+                    schemaElement.appendChild(simpleFieldElement);
+                }
+
+                documentElement.appendChild(schemaElement);
+
+                // 各フィーチャをPlacemarkとして追加
+                geojson.features.forEach(feature => {
+                    const placemarkElement = kmlDocument.createElement('Placemark');
+
+                    // ExtendedDataの追加
+                    const extendedDataElement = kmlDocument.createElement('ExtendedData');
+                    const schemaDataElement = kmlDocument.createElement('SchemaData');
+                    schemaDataElement.setAttribute('schemaUrl', '#attributes');
+
+                    for (let prop in allProperties) { // すべての属性に対して
+                        const simpleDataElement = kmlDocument.createElement('SimpleData');
+                        simpleDataElement.setAttribute('name', prop);
+                        simpleDataElement.textContent = feature.properties[prop] !== undefined ? feature.properties[prop] : "NULL"; // 属性がundefinedの場合は "NULL" として出力
+                        schemaDataElement.appendChild(simpleDataElement);
+                    }
+
+                    extendedDataElement.appendChild(schemaDataElement);
+                    placemarkElement.appendChild(extendedDataElement);
+
+                    // ジオメトリの変換（この例ではポリゴンのみを対象とします）
+                    if (feature.geometry.type === 'Polygon') {
+                        const polygonElement = kmlDocument.createElement('Polygon');
+                        const outerBoundaryIsElement = kmlDocument.createElement('outerBoundaryIs');
+                        const linearRingElement = kmlDocument.createElement('LinearRing');
+                        const coordinatesElement = kmlDocument.createElement('coordinates');
+
+                        coordinatesElement.textContent = feature.geometry.coordinates[0].map(coord => `${coord[0]},${coord[1]}`).join(' ');
+
+                        linearRingElement.appendChild(coordinatesElement);
+                        outerBoundaryIsElement.appendChild(linearRingElement);
+                        polygonElement.appendChild(outerBoundaryIsElement);
+                        placemarkElement.appendChild(polygonElement);
+                    }
+
+                    // PlacemarkをDocumentに追加
+                    documentElement.appendChild(placemarkElement);
+                });
+
+                return kmlDocument;
+            }
+
+            // マップの初期化
             var map = new maplibregl.Map({
                 container: 'map',
                 style: 'https://tile2.openstreetmap.jp/styles/osm-bright-ja/style.json',
-                center: [139.46009, 35.89367],
-                zoom: 15.05,
+                center: [139.45806, 35.90154],
+                zoom: 11.95,
                 hash: true,
                 attributionControl: false
             });
@@ -91,7 +202,7 @@
             // 参考：https://flatgeobuf.org/examples/maplibre/
             map.on("load", async () => {
                 // GeoJSONにデシリアライズ
-                const fc = { type: "FeatureCollection", features: [] };
+                // const fc = { type: "FeatureCollection", features: [] };
                 let i = 0;
                 for await (const f of flatgeobuf.deserialize(
                     response.body,
@@ -106,7 +217,7 @@
                 map.addSource("moj-fgb", {
                     type: "geojson",
                     data: fc,
-                    attribution: '<a href="https://www.geospatial.jp/ckan/dataset/aigid-moj-11201">「登記所備付データ川越市」（法務省）をもとに変換処理して作成</a>',
+                    attribution: '<a href="https://www.geospatial.jp/ckan/dataset/aigid-moj-11201">「登記所備付データ川越市」（法務省）を変換処理して作成</a>',
                     generateId: true
                 });
 
@@ -169,6 +280,32 @@
 
             });
 
+            // XMLDocumentを文字列に変換する関数
+            function xmlToString(xmlDom) {
+                return new XMLSerializer().serializeToString(xmlDom);
+            }
+
+            // ダウンロードボタンのイベントリスナー
+            document.getElementById('downloadKML').addEventListener('click', () => {
+                let kmlDomObject = geojsonToKML(fc);  // `fc` は以前に作成した GeoJSON オブジェクト
+                const kmlData = xmlToString(kmlDomObject); // ここで文字列に変換
+                const blob = new Blob([kmlData], { type: 'application/vnd.google-earth.kml+xml' });
+                const url = URL.createObjectURL(blob);
+
+                const a = document.createElement('a');
+                a.style.display = 'none';
+                a.href = url;
+                a.download = 'data.kml';
+
+                document.body.appendChild(a);
+                a.click();
+
+                setTimeout(() => {
+                    document.body.removeChild(a);
+                    window.URL.revokeObjectURL(url);
+                }, 100);
+            });
+
             // ポップアップ表示
             map.on('click', 'moj-fill', (e) => {
                 var lng = e.lngLat.lng;
@@ -225,7 +362,6 @@
                     .addTo(map);
             });
         });
-
     </script>
 </body>
 
